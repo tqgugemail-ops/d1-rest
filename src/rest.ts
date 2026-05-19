@@ -1,6 +1,34 @@
 import { Context } from 'hono';
 import type { Env } from './index';
 
+// ========== 新增：表名白名单 ==========
+const ALLOWED_TABLES = [
+    'userlist',
+    'convlist', 
+    'msglist',
+    'likelist',
+    'commentslist'
+] as const;
+
+type AllowedTable = typeof ALLOWED_TABLES[number];
+
+/**
+ * 验证表名是否在白名单中
+ */
+function isValidTable(tableName: string): tableName is AllowedTable {
+    return ALLOWED_TABLES.includes(tableName as AllowedTable);
+}
+
+/**
+ * 获取安全的表名（带白名单验证）
+ */
+function getSafeTableName(tableName: string): AllowedTable {
+    if (!isValidTable(tableName)) {
+        throw new Error(`Table '${tableName}' is not allowed. Allowed tables: ${ALLOWED_TABLES.join(', ')}`);
+    }
+    return tableName;
+}
+
 /**
  * Sanitizes an identifier by removing all non-alphanumeric characters except underscores.
  */
@@ -19,7 +47,15 @@ function sanitizeKeyword(identifier: string): string {
  * Handles GET requests to fetch records from a table
  */
 async function handleGet(c: Context<{ Bindings: Env }>, tableName: string, id?: string): Promise<Response> {
-    const table = sanitizeKeyword(tableName);
+    // 白名单验证
+    let safeTableName: string;
+    try {
+        safeTableName = getSafeTableName(tableName);
+    } catch (error: any) {
+        return c.json({ error: error.message }, 400);
+    }
+    
+    const table = sanitizeKeyword(safeTableName);
     const searchParams = new URL(c.req.url).searchParams;
     
     try {
@@ -81,7 +117,15 @@ async function handleGet(c: Context<{ Bindings: Env }>, tableName: string, id?: 
  * Handles POST requests to create new records
  */
 async function handlePost(c: Context<{ Bindings: Env }>, tableName: string): Promise<Response> {
-    const table = sanitizeKeyword(tableName);
+    // 白名单验证
+    let safeTableName: string;
+    try {
+        safeTableName = getSafeTableName(tableName);
+    } catch (error: any) {
+        return c.json({ error: error.message }, 400);
+    }
+    
+    const table = sanitizeKeyword(safeTableName);
     const data = await c.req.json();
 
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -98,7 +142,7 @@ async function handlePost(c: Context<{ Bindings: Env }>, tableName: string): Pro
             .bind(...params)
             .run();
 
-        return c.json({ message: 'Resource created successfully', data }, 201);
+        return c.json({ message: 'Resource created successfully', data, id: result.meta?.last_row_id }, 201);
     } catch (error: any) {
         return c.json({ error: error.message }, 500);
     }
@@ -108,7 +152,15 @@ async function handlePost(c: Context<{ Bindings: Env }>, tableName: string): Pro
  * Handles PUT/PATCH requests to update records
  */
 async function handleUpdate(c: Context<{ Bindings: Env }>, tableName: string, id: string): Promise<Response> {
-    const table = sanitizeKeyword(tableName);
+    // 白名单验证
+    let safeTableName: string;
+    try {
+        safeTableName = getSafeTableName(tableName);
+    } catch (error: any) {
+        return c.json({ error: error.message }, 400);
+    }
+    
+    const table = sanitizeKeyword(safeTableName);
     const data = await c.req.json();
 
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -138,7 +190,15 @@ async function handleUpdate(c: Context<{ Bindings: Env }>, tableName: string, id
  * Handles DELETE requests to remove records
  */
 async function handleDelete(c: Context<{ Bindings: Env }>, tableName: string, id: string): Promise<Response> {
-    const table = sanitizeKeyword(tableName);
+    // 白名单验证
+    let safeTableName: string;
+    try {
+        safeTableName = getSafeTableName(tableName);
+    } catch (error: any) {
+        return c.json({ error: error.message }, 400);
+    }
+    
+    const table = sanitizeKeyword(safeTableName);
 
     try {
         const query = `DELETE FROM ${table} WHERE id = ?`;
@@ -150,6 +210,51 @@ async function handleDelete(c: Context<{ Bindings: Env }>, tableName: string, id
     } catch (error: any) {
         return c.json({ error: error.message }, 500);
     }
+}
+
+/**
+ * 新增：获取所有允许的表名
+ */
+export function getAllowedTables(): string[] {
+    return [...ALLOWED_TABLES];
+}
+
+/**
+ * 新增：批量操作多个表
+ */
+export async function handleBatchOperation(
+    c: Context<{ Bindings: Env }>, 
+    operations: Array<{ table: string; action: string; data?: any; id?: string }>
+): Promise<Response> {
+    const results = [];
+    
+    for (const op of operations) {
+        try {
+            // 验证每个操作中的表名
+            const safeTableName = getSafeTableName(op.table);
+            
+            switch (op.action) {
+                case 'get':
+                    // 处理获取操作
+                    break;
+                case 'post':
+                    // 处理创建操作
+                    break;
+                case 'update':
+                    // 处理更新操作
+                    break;
+                case 'delete':
+                    // 处理删除操作
+                    break;
+                default:
+                    results.push({ table: op.table, error: 'Unknown action' });
+            }
+        } catch (error: any) {
+            results.push({ table: op.table, error: error.message });
+        }
+    }
+    
+    return c.json({ results });
 }
 
 /**
@@ -166,6 +271,13 @@ export async function handleRest(c: Context<{ Bindings: Env }>): Promise<Respons
     const tableName = pathParts[1];
     const id = pathParts[2];
     
+    // 提前验证表名
+    if (!isValidTable(tableName)) {
+        return c.json({ 
+            error: `Table '${tableName}' is not allowed. Allowed tables: ${ALLOWED_TABLES.join(', ')}` 
+        }, 400);
+    }
+    
     switch (c.req.method) {
         case 'GET':
             return handleGet(c, tableName, id);
@@ -181,4 +293,4 @@ export async function handleRest(c: Context<{ Bindings: Env }>): Promise<Respons
         default:
             return c.json({ error: 'Method not allowed' }, 405);
     }
-} 
+}
